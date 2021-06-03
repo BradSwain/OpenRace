@@ -16,20 +16,18 @@ jobs:
        - DartConfiguration.tcl
   test:
     docker: 
-     - image: coderrect/openrace-en
+     - image: coderrect/openrace-env
     steps:
      - attach_workspace:
         at: .
      - run: ctest --parallel $(nproc)
     
-
-
 workflows:
   version: 2
   build-and-test:
     jobs:
       - build
       - test:
-        - requires:
-          - build
+          requires:
+            - build
         
