@@ -2,20 +2,18 @@ version: 2
 
 jobs:
   build:
-    working_directory:
     docker: 
       - image: coderrect/openrace-env
     steps:
       - checkout
       - run:
-        name: "sample"
-        command: | 
-          cd OpenRace
-          pwd
-          mkdir build && cd build
-          pwd
-          cmake -DCMAKE_BUILD_TYPE=Debug -DLLVM_BUILD_TYPE=$BUILD_TYPE -DLLVM_DIR=/usr/local/lib/cmake/llvm/ ..
-          cmake -- build . --parallel
+          name: Setup cmake and build artifacts
+          command: |
+            pwd
+            mkdir build && cd build
+            cmake -DCMAKE_BUILD_TYPE=Debug -DLLVM_BUILD_TYPE=$BUILD_TYPE -DLLVM_DIR=/usr/local/lib/cmake/llvm/ ..
+            cmake --build . --parallel
+            ctest
     persist_to_workspace:
       root: .
       paths: 
