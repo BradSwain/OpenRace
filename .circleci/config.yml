@@ -18,8 +18,8 @@ jobs:
     docker: 
      - image: coderrect/openrace-en
     steps:
-     - attach_to_workspace:
-      at: .
+     - attach_workspace:
+        at: .
      - run: ctest --parallel $(nproc)
     
 
