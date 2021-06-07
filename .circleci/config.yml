@@ -12,8 +12,8 @@ jobs:
             pwd
             mkdir build && cd build
             cmake -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR=/usr/local/lib/cmake/llvm/ ..
-            cmake --build . --parallel 2
-            ctest --parallel 2
+            cmake --build . --parallel $(nproc)
+            ctest --parallel $(nproc)
       - store_artifacts:
           path: build/testresults
       - store_test_results:
