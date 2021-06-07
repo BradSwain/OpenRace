@@ -12,27 +12,12 @@ jobs:
             pwd
             mkdir build && cd build
             cmake -DCMAKE_BUILD_TYPE=Debug -DLLVM_DIR=/usr/local/lib/cmake/llvm/ ..
-            cmake --build .
+            cmake --build . --parallel 2
             ctest
-    persist_to_workspace:
-      root: .
-      paths: 
-       - bin
-       - DartConfiguration.tcl
-  test:
-    docker: 
-     - image: coderrect/openrace-env
-    steps:
-     - attach_workspace:
-        at: .
-     - run: ctest --parallel $(nproc)
-    
+
 workflows:
   version: 2
   build-and-test:
     jobs:
       - build
-      - test:
-          requires:
-            - build
         
