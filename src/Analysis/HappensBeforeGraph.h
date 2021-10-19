@@ -50,8 +50,9 @@ class HappensBeforeGraph {
   };
 
   std::map<EventPID, std::set<EventPID>> syncEdges;
+  std::map<EventPID, std::set<EventPID>> syncReachable;
   // DFS on syncEdges to see if src can reach dst
-  [[nodiscard]] bool syncEdgesDFS(EventPID src, EventPID dst) const;
+  [[nodiscard]] bool isReachable(EventPID src, EventPID dst) const;
   [[nodiscard]] bool hasEdge(EventPID src, EventPID dst) const;
 
   // Per-thread **SORTED** list of sync events

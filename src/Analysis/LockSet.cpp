@@ -11,12 +11,20 @@ limitations under the License.
 
 #include "LockSet.h"
 
+#include <set>
+
 using namespace race;
 
-namespace {
-std::set<const llvm::Value *> heldLocks(const Event *targetEvent) {
-  std::set<const llvm::Value *> locks;
-
+std::multiset<const llvm::Value *> LockSet::heldLocks(const Event *targetEvent) {
+  // check if we have it cached
+  // cppcheck-suppress stlIfFind
+  if (auto it = cache.find(targetEvent); it != cache.end()) {
+    return it->second;
+  }
+  std::multiset<const llvm::Value *> locks;
+  if (DEBUG_PTA) {
+    llvm::outs() << "--------------------------\n";
+  }
   auto const &thread = targetEvent->getThread();
   for (auto const &event : thread.getEvents()) {
     if (event->getID() == targetEvent->getID()) {
@@ -26,11 +34,27 @@ std::set<const llvm::Value *> heldLocks(const Event *targetEvent) {
       case Event::Type::Lock: {
         auto lockEvent = llvm::cast<LockEvent>(event.get());
         locks.insert(lockEvent->getIRInst()->getLockValue());
+        if (DEBUG_PTA) {
+          llvm::outs() << "After lock: {";
+          auto it = locks.begin();
+          for (; it != locks.end(); it++) llvm::outs() << *it << " ";
+          llvm::outs() << "}\n";
+        }
         break;
       }
       case Event::Type::Unlock: {
         auto unlockEvent = llvm::cast<UnlockEvent>(event.get());
-        locks.erase(unlockEvent->getIRInst()->getLockValue());
+        const llvm::Value *ele = unlockEvent->getIRInst()->getLockValue();
+        const auto &first = locks.find(ele);
+        if (first != locks.end()) {  // only remove the first element
+          locks.erase(first);
+        }
+        if (DEBUG_PTA) {
+          llvm::outs() << "After unlock: {";
+          auto it = locks.begin();
+          for (; it != locks.end(); it++) llvm::outs() << *it << " ";
+          llvm::outs() << "}\n";
+        }
         break;
       }
       default:
@@ -39,17 +63,28 @@ std::set<const llvm::Value *> heldLocks(const Event *targetEvent) {
     }
   }
 
+  cache.emplace(targetEvent, locks);
   return locks;
 }
-}  // namespace
 
-LockSet::LockSet(const ProgramTrace &program) {}
+LockSet::LockSet(const ProgramTrace & /* program */) : cache({}) {}
 
-// TODO: real implementation later
-bool LockSet::sharesLock(const MemAccessEvent *lhs, const MemAccessEvent *rhs) const {
+bool LockSet::sharesLock(const MemAccessEvent *lhs, const MemAccessEvent *rhs) {
   auto const lhsLocks = heldLocks(lhs);
   auto const rhsLocks = heldLocks(rhs);
 
-  return std::any_of(lhsLocks.begin(), lhsLocks.end(),
-                     [&rhsLocks](const llvm::Value *lock) { return rhsLocks.find(lock) != rhsLocks.end(); });
+  auto lhsIter = lhsLocks.begin();
+  auto rhsIter = rhsLocks.begin();
+
+  while (lhsIter != lhsLocks.end() && rhsIter != rhsLocks.end()) {
+    if (rhsIter == rhsLocks.end() || *lhsIter < *rhsIter) {
+      lhsIter++;
+    } else if (lhsIter == lhsLocks.end() || *lhsIter > *rhsIter) {
+      rhsIter++;
+    } else {
+      return true;
+    }
+  }
+
+  return false;
 }

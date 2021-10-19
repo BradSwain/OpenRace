@@ -34,6 +34,17 @@ DEBUG_COUNTER(CPCounter, "constprop-transform", "Controls which instructions are
 
 namespace {
 
+// only isa<StoreInst> is not enough to guarantee the GV has no overwritten,
+// e.g., @counter in DRB088-dynamic-storage-orig-yes.ll:
+//   source code: counter++
+//   IR: there is always a StoreInst after LoadInst:
+//       %0 = load i32*, i32** @counter, align 8, !dbg !21, !tbaa !22  --> load to %0
+//       %1 = load i32, i32* %0, align 4, !dbg !26, !tbaa !27
+//       %inc = add nsw i32 %1, 1, !dbg !26
+//       store i32 %inc, i32* %0, align 4, !dbg !26, !tbaa !27         --> store to %0: changed
+// to precisely determine whether GV (counter here) will be overwritten afterwards is complex and expensive,
+// which requires inter-procedural data-flow analysis/forward slicing.
+// TODO: find a solution?
 inline bool hasGlobalOverwritten(GlobalVariable *GV) {
   for (auto user : GV->users()) {
     if (isa<StoreInst>(user)) {
@@ -41,6 +52,23 @@ inline bool hasGlobalOverwritten(GlobalVariable *GV) {
     }
   }
   return false;
+}
+
+// Try to convert the constant C to type T, return nullptr if unable
+llvm::Constant *convertConstant(llvm::Constant *C, llvm::Type *T) {
+  auto const srcType = C->getType();
+
+  if (srcType->isFloatingPointTy() && T->isIntegerTy()) {
+    return llvm::ConstantExpr::getFPToSI(C, T);
+  }
+
+  if (srcType->isIntegerTy() && T->isFloatingPointTy()) {
+    return llvm::ConstantExpr::getSIToFP(C, T);
+  }
+
+  // TODO: are there other conversions we need to handle?
+
+  return nullptr;
 }
 
 bool intraConstantProp(Function &F, const TargetLibraryInfo &TLI) {
@@ -69,10 +97,15 @@ bool intraConstantProp(Function &F, const TargetLibraryInfo &TLI) {
         continue;
       }  // Don't muck with dead instructions...
 
+      // The intuition is to identify the constant global var that passed to openmp as a bound
+      // of array index accesses, to give convenience for pointer analysis and shared memory access analysis
       Constant *C = nullptr;
       if (auto LI = dyn_cast<LoadInst>(I)) {
         if (auto GV = dyn_cast<GlobalVariable>(LI->getPointerOperand()->stripPointerCasts())) {
-          if (GV->hasInitializer()) {
+          if (GV->hasInitializer() && !GV->hasCommonLinkage()) {
+            // from https://llvm.org/docs/LangRef.html:
+            // “common” linkage is most similar to “weak” linkage, but they are used for tentative definitions in C,
+            // such as “int X;” at global scope.
             if (GV->isConstant() || !hasGlobalOverwritten(GV)) {
               C = GV->getInitializer();
             }
@@ -89,9 +122,19 @@ bool intraConstantProp(Function &F, const TargetLibraryInfo &TLI) {
           // If user not in the set, then add it to the vector.
           if (WorkList.insert(cast<Instruction>(U)).second) NewWorkListVec.push_back(cast<Instruction>(U));
         }
-        // Replace all of the uses of a variable with uses of the
-        // constant.
-        I->replaceAllUsesWith(C);
+
+        // If the types do not match, try to convert the type
+        // this can happen when a global constant is one type e.g. double
+        // and the instruction looks like:
+        //   load i64, i64* bitcast (double* @relax to i64*)
+        if (C->getType() != I->getType()) {
+          C = convertConstant(C, I->getType());
+        }
+
+        // Replace all of the uses of a variable with uses of the constant.
+        if (C) {
+          I->replaceAllUsesWith(C);
+        }
 
         if (isInstructionTriviallyDead(I, &TLI)) {
           I->eraseFromParent();
@@ -274,28 +317,73 @@ bool PropagateConstantsIntoArguments(Function &F, const DominatorTree &DT, const
   return MadeChange;
 }
 
-bool runOpenMPConstantPropagation(Module &M, std::function<const TargetLibraryInfo &(Function &)> GetTLI,
-                                  std::function<const DominatorTree &(Function &)> GetDT) {
+// we can get a list of function which are users of this function -- if a constant is propagated in a user, we may
+// need to propagate it to used functions, so this method allows us to collect the relevant functions
+std::set<Function *> getUserFunctions(Function &F) {
+  std::set<Function *> userFunctions;
+  for (Use &U : F.uses()) {
+    User *UR = U.getUser();
+    // Ignore blockaddress uses.
+    if (isa<BlockAddress>(UR)) continue;
+
+    // If no abstract call site was created we did not understand the use,
+    // bail.
+    AbstractCallSite ACS(&U);
+    if (!ACS) return {};  // this would be bailed anyways
+
+    // Mismatched argument count is undefined behavior. Simply bail out to
+    // avoid handling of such situations below (avoiding asserts/crashes).
+    unsigned NumActualArgs = ACS.getNumArgOperands();
+    if (F.isVarArg() ? F.arg_size() > NumActualArgs : F.arg_size() != NumActualArgs)
+      return {};  // this would be bailed anyways
+
+    userFunctions.insert(ACS.getInstruction()->getParent()->getParent());
+  }
+  return userFunctions;
+}
+
+// TODO fix constant propagation in libraries where exported functions are called called internally as well, leading to
+// false negatives due to incorrect constant propagation
+bool runOpenMPConstantPropagation(Module &M, const std::function<const TargetLibraryInfo &(Function &)> &GetTLI,
+                                  const std::function<const DominatorTree &(Function &)> &GetDT) {
   bool Changed = false;
   bool ArgPropagated = true;
   bool FunctionChanged = true;
 
+  // this map keeps track of all function uses that we consider legitimate in the program
+  //
+  // since the number of function calls per function averages out to some constant (which appears to be somewhere around
+  // 4 or 5 for typical cases), the list here will grow linearly with function size with a relatively small factor
+  std::multimap<Function *, Function *> userEdges;
+
   for (Function &F : M) {
     const TargetLibraryInfo &TLI = GetTLI(F);
-    Changed = intraConstantProp(F, TLI);
+    Changed |= intraConstantProp(F, TLI);
+    for (auto userFunction : getUserFunctions(F)) {
+      userEdges.emplace(userFunction, &F);
+    }
   }
 
+  if (userEdges.size() > 10 * M.getFunctionList().size()) {
+    llvm::errs() << "WARNING: OmpConstPropPass found significantly more user edges (" << userEdges.size()
+                 << ") than functions (" << M.getFunctionList().size() << ") in module!\n";
+  }
+
+  SmallSet<Function *, 8> work;
+  for (auto edge : userEdges) {
+    work.insert(edge.first);
+  }
   // propagate constant into function arguement
   SmallSet<Function *, 8> changedFunction;
   while (FunctionChanged) {
     while (ArgPropagated) {
       ArgPropagated = false;
-      for (Function &F : M) {
-        if (!F.isDeclaration()) {
+      for (Function *F : work) {
+        if (!F->isDeclaration()) {
           // Delete any klingons.
-          F.removeDeadConstantUsers();
-          if (PropagateConstantsIntoArguments(F, GetDT(F), GetTLI(F))) {
-            changedFunction.insert(&F);
+          F->removeDeadConstantUsers();
+          if (PropagateConstantsIntoArguments(*F, GetDT(*F), GetTLI(*F))) {
+            changedFunction.insert(F);
             ArgPropagated = true;
           }
         }
@@ -304,13 +392,21 @@ bool runOpenMPConstantPropagation(Module &M, std::function<const TargetLibraryIn
     }
 
     FunctionChanged = false;
-    // propagate constant inside the function
-    if (!changedFunction.empty()) {
-      for (Function *F : changedFunction) {
-        const TargetLibraryInfo &TLI = GetTLI(*F);
-        FunctionChanged |= intraConstantProp(*F, TLI);
+    // propagate constant inside the function and prep next propagation
+    work.clear();
+    for (Function *F : changedFunction) {
+      const TargetLibraryInfo &TLI = GetTLI(*F);
+      auto furtherPropagated = intraConstantProp(*F, TLI);
+      FunctionChanged |= furtherPropagated;
+      if (furtherPropagated) {
+        auto userEdgeRange = userEdges.equal_range(F);
+        for (auto userEdgeIter = userEdgeRange.first; userEdgeIter != userEdgeRange.second; userEdgeIter++) {
+          work.insert(userEdgeIter->second);  // these are the only entries which were propagated to
+        }
       }
     }
+
+    changedFunction.clear();
   }
   return Changed;
 }

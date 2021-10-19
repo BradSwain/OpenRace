@@ -179,6 +179,7 @@ class SolverBase {
 
     struct OnNewConstraints : public ConsGraphTy::OnNewConstraintCallBack {
       CallBack &CB;
+      virtual ~OnNewConstraints() {}
       explicit OnNewConstraints(CallBack &CB) : CB(CB) {}
 
       void onNewConstraint(CGNodeTy *src, CGNodeTy *dst, Constraints constraint) override {
@@ -208,7 +209,7 @@ class SolverBase {
 
     bool changed = false;
     for (auto it = PT::begin(dst->getNodeID()), ie = PT::end(dst->getNodeID()); it != ie; it++) {
-      auto tmp = llvm::dyn_cast<ObjNodeTy>(consGraph->getCGNode(*it));
+      // auto tmp = llvm::dyn_cast<ObjNodeTy>(consGraph->getCGNode(*it));
       auto node = consGraph->getObjectNode(*it);
       node = node->getSuperNode();
 
@@ -338,7 +339,7 @@ class SolverBase {
     result.push_back(lockStrObjects.at(lockStr)->getObject());
   }
 
-  void getPointsTo(const ctx *context, const llvm::Value *V, std::vector<const ObjTy *> &result) const {
+  void getPointsTo(const ctx *context, const llvm::Value *V, std::multiset<const ObjTy *> &result) const {
     assert(V->getType()->isPointerTy());
 
     // get the node value
@@ -353,7 +354,7 @@ class SolverBase {
       if (objNode->isSpecialNode()) {
         continue;
       }
-      result.push_back(objNode->getObject());
+      result.insert(objNode->getObject());
     }
   }
 

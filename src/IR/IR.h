@@ -32,22 +32,28 @@ class IR {
     Fork,
     PthreadCreate,
     OpenMPFork,
+    OpenMPTaskFork,
+    OpenMPForkTeams,
     END_Fork,
     Join,
     PthreadJoin,
     OpenMPJoin,
+    OpenMPTaskJoin,
+    OpenMPJoinTeams,
     END_Join,
     Lock,
     PthreadMutexLock,
     PthreadSpinLock,
     OpenMPCriticalStart,
     OpenMPSetLock,
+    OpenMPOrderedStart,
     END_Lock,
     Unlock,
     PthreadMutexUnlock,
     PthreadSpinUnlock,
     OpenMPCriticalEnd,
     OpenMPUnsetLock,
+    OpenMPOrderedEnd,
     END_Unlock,
     Barrier,
     OpenMPBarrier,
@@ -55,12 +61,19 @@ class IR {
     Call,
     OpenMPForInit,
     OpenMPForFini,
+    OpenMPDispatchInit,
+    OpenMPDispatchNext,
+    OpenMPDispatchFini,
     OpenMPSingleStart,
     OpenMPSingleEnd,
     OpenMPReduce,
     OpenMPMasterStart,
     OpenMPMasterEnd,
-    END_Call
+    OpenMPGetThreadNum,
+    OpenMPTaskWait,
+    OpenMPGetThreadNumGuardStart,
+    OpenMPGetThreadNumGuardEnd,
+    END_Call,
   } type;
   [[nodiscard]] virtual const llvm::Instruction *getInst() const = 0;
 
@@ -197,7 +210,7 @@ class BarrierIR : public IR {
 
 // CallIR is the only class in IR.h that can be concrete.
 // Most function calls should use CallIR's public constructor.
-// In some special cases, we want to note calls to specifc functions, such as omp_for_init.
+// In some special cases, we want to note calls to specific functions, such as omp_for_init.
 // In these rare special cases there can be sub-types that inherit from CallIR and use the protected constructor.
 class CallIR : public IR {
   const llvm::CallBase *inst;
@@ -214,6 +227,10 @@ class CallIR : public IR {
   [[nodiscard]] inline const llvm::CallBase *getInst() const override { return inst; }
 
   [[nodiscard]] inline bool isIndirect() const { return inst->isIndirectCall(); }
+
+  [[nodiscard]] virtual const llvm::Function *getCalledFunction() const { return resolveTargetFunction(getInst()); }
+
+  static llvm::Function *resolveTargetFunction(const llvm::CallBase *callInst);
 
   // Used for llvm style RTTI (isa, dyn_cast, etc.)
   static bool classof(const IR *e) { return e->type >= Type::Call && e->type < Type::END_Call; }

@@ -11,6 +11,8 @@ limitations under the License.
 
 #pragma once
 
+#include <optional>
+
 #include "IR/IR.h"
 #include "LanguageModel/RaceModel.h"
 
@@ -39,6 +41,7 @@ class Event {
   [[nodiscard]] virtual const race::IR *getIRInst() const = 0;
   [[nodiscard]] virtual const llvm::Instruction *getInst() const { return getIRInst()->getInst(); }
   [[nodiscard]] const llvm::Function *getFunction() const { return getInst()->getFunction(); }
+  [[nodiscard]] race::IR::Type getIRType() const { return getIRInst()->type; }
 
  protected:
   explicit Event(Type type) : type(type) {}
@@ -53,7 +56,7 @@ class MemAccessEvent : public Event {
 
  public:
   [[nodiscard]] const race::MemAccessIR *getIRInst() const override = 0;
-  [[nodiscard]] virtual std::vector<const pta::ObjTy *> getAccessedMemory() const = 0;
+  [[nodiscard]] virtual const std::multiset<const pta::ObjTy *> getAccessedMemory() const = 0;
 
   // Used for llvm style RTTI (isa, dyn_cast, etc.)
   [[nodiscard]] static inline bool classof(const Event *e) { return e->type == Type::Read || e->type == Type::Write; }
@@ -87,7 +90,7 @@ class ForkEvent : public Event {
 
  public:
   [[nodiscard]] virtual std::vector<const pta::ObjTy *> getThreadHandle() const = 0;
-  [[nodiscard]] virtual std::vector<const pta::CallGraphNodeTy *> getThreadEntry() const = 0;
+  [[nodiscard]] virtual const pta::CallGraphNodeTy *getThreadEntry() const = 0;
 
   [[nodiscard]] inline const race::ForkIR *getIRInst() const override = 0;
 
@@ -100,6 +103,8 @@ class JoinEvent : public Event {
   JoinEvent() : Event(Type::Join) {}
 
  public:
+  // return the corresponding fork event if it is known
+  [[nodiscard]] virtual std::optional<const ForkEvent *> getForkEvent() const = 0;
   [[nodiscard]] virtual std::vector<const pta::ObjTy *> getThreadHandle() const = 0;
 
   [[nodiscard]] inline const race::JoinIR *getIRInst() const override = 0;

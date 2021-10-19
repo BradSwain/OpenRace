@@ -170,7 +170,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
     LOG_DEBUG("PTA resolving indirect function pointers. size={}", funPtrs.count());
 
     bool changed = false;
-    size_t beforeResolve = this->getConsGraph()->getNodeNum();
+    [[maybe_unused]] size_t beforeResolve = this->getConsGraph()->getNodeNum();
 
     for (NodeID id : funPtrs) {
       // in case the node is collapsed
@@ -184,7 +184,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
 
       // TODO: track if the points-to of a funcPtr has changed?
       // TODO: maintain a map from funcPtr to its newly added function object?
-      uint8_t count = 0;
+      // uint8_t count = 0;
 
       for (auto it = pointsTo.begin(), eit = pointsTo.end(); it != eit; it++) {
         // count++;
@@ -224,7 +224,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
               }
 
               // if result == CRITICAL, do not apply limit
-              bool applyLimit = result == IndirectResolveOption::WITH_LIMIT;
+              bool applyLimit = (result == IndirectResolveOption::WITH_LIMIT ? true : false);
               bool newTarget = indirectNode->getTargetFunPtr()->resolvedTo(target, applyLimit);
 
               if (newTarget) {
@@ -242,7 +242,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
       }
     }
     if (changed) {
-      size_t afterResolve = this->getConsGraph()->getNodeNum();
+      [[maybe_unused]] size_t afterResolve = this->getConsGraph()->getNodeNum();
       LOG_DEBUG("PTA Node Stat: Before={}, After={}, New={}", beforeResolve, afterResolve,
                 afterResolve - beforeResolve);
     }
@@ -303,17 +303,17 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
     auto aIt = CS.arg_begin();       // actual
     auto fIt = callee->arg_begin();  // formal
 
-    // some low-level bitcast does not maintain the type equvilance....
+    // some low-level bitcast does not maintain the type equivalence....
     while (fIt != callee->arg_end() && aIt != CS.arg_end()) {
       const llvm::Value *actual = *aIt;
       const llvm::Argument *formal = &*fIt;
       // at least they should be pointer at the same time
       assert(formal->getType()->isPointerTy() == actual->getType()->isPointerTy());
       if (actual->getType()->isPointerTy()) {
-        CGNodeTy *aNode = this->getPtrNode(caller->getContext(), actual);
+        CGNodeTy *aNode = this->getOrCreatePtrNode(caller->getContext(), actual);
         // If the actual arguments passed to the resolved indirect call
         // site might be super nodes
-        auto fNode = this->getPtrNode(callee->getContext(), formal);
+        auto fNode = this->getOrCreatePtrNode(callee->getContext(), formal);
         // actual argument is assigned to the formal argument.
         this->consGraph->addConstraints(aNode, fNode, Constraints::copy);
       }
@@ -345,7 +345,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
 
     if (callee->getFunction()->getReturnType()->isPointerTy() && callsite->getType()->isPointerTy()) {
       auto src = this->getRetNode(callee->getContext(), callee->getFunction());
-      auto dst = this->getPtrNode(caller->getContext(), callsite);
+      auto dst = this->getOrCreatePtrNode(caller->getContext(), callsite);
       consGraph->addConstraints(src, dst, Constraints::copy);
     }
   }
@@ -394,21 +394,21 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
 
  public:
   ConsGraphBuilder(llvm::Module *M, llvm::StringRef entry)
-      : beforeNewNode{.self = *this},
-        onNewDirect{.self = *this},
-        onNewInDirect{.self = *this},
-        onNewEdge{.self = *this},      // callbacks
-        consGraph(new ConsGraphTy()),  // the constraint graph
-        memModel(*consGraph.get(), *this, *M),
-        module(new CtxModule<ctx>(M, entry)) {  // the module represent the programs
-
+      : module(new CtxModule<ctx>(M, entry)),
+        consGraph(new ConsGraphTy()),           // the constraint graph
+        memModel(*consGraph.get(), *this, *M),  // the module represent the programs
+        beforeNewNode{*this},
+        onNewDirect{*this},
+        onNewInDirect{*this},
+        onNewEdge{*this} {  // callbacks
     // init the pointer node manager
     PtrNodeManager<ctx>::template init<PT>(consGraph.get(), M->getContext());
 
     Object<ctx, ObjT>::resetObjectID();
+
     // null and universal object nodes;
-    CGNodeBase<ctx> *nullObj = ALLOCATE(NullObj, module->getLLVMModule());
-    CGNodeBase<ctx> *uniObj = ALLOCATE(UniObj, module->getLLVMModule());
+    [[maybe_unused]] CGNodeBase<ctx> *nullObj = ALLOCATE(NullObj, module->getLLVMModule());
+    [[maybe_unused]] CGNodeBase<ctx> *uniObj = ALLOCATE(UniObj, module->getLLVMModule());
 
     // enable this if you want the special nodes to appear in the points to set
 #ifdef SPECIAL_NODE_IN_PTS
@@ -516,7 +516,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
       // store a pointer into memory
       // store *src into **dst
 #ifndef NDEBUG
-      const llvm::Value *src = Canonicalizer::canonicalize(I.getValueOperand());
+      // const llvm::Value *src = Canonicalizer::canonicalize(I.getValueOperand());
       const llvm::Value *dst = Canonicalizer::canonicalize(I.getPointerOperand());
 
       if (dst == this->getUniPtr()->getPointer()->getValue() || dst == this->getNullPtr()->getPointer()->getValue()) {
@@ -530,6 +530,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
       }
 
 #endif
+
       CGPtrNode<ctx> *srcNode = this->getOrCreatePtrNode(context, operand);
       CGPtrNode<ctx> *dstNode = this->getOrCreatePtrNode(context, I.getPointerOperand());
       consGraph->addConstraints(srcNode, dstNode, Constraints::store);
@@ -546,7 +547,7 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
         return;
       }
       // else create a new PtrNode to catch the returned pointer
-      // the　COPY edge will then be added in OnNewCallEdge() where callee
+      // the COPY edge will then be added in OnNewCallEdge() where callee
       // is guaranteed to be initialized already
       getOrCreatePtrNode(context, &CB);
     }
@@ -597,32 +598,35 @@ class ConsGraphBuilder : public llvm::CtxInstVisitor<ctx, SubClass>, public PtrN
   inline void visitExtractValueInst(llvm::ExtractValueInst &I, const ctx *context) {
     if (I.getType()->isPointerTy()) {
       LOG_TRACE("Extract a pointer is not handled! inst={}", I);
-      auto dst = this->getOrCreatePtrNode(context, &I);
+      // auto dst = this->getOrCreatePtrNode(context, &I); // bz: comment off to avoid -Wunused-variable on dst, this
+      // needs to be kept for future use
     }
   }
 
-  inline void visitInsertValueInst(llvm::InsertValueInst &I, const ctx *context) {}
+  // bz: the following functions are not implemented/finished, comment off to avoid warnings; add back if requiring
+  // changes inline void visitInsertValueInst(llvm::InsertValueInst &I, const ctx *context) {}
 
-  // corner cases
-  inline void visitAtomicCmpXchgInst(llvm::AtomicCmpXchgInst &I, const ctx *context) {}
-  inline void visitAtomicRMWInst(llvm::AtomicRMWInst &I, const ctx *context) {}
-  inline void visitVAArgInst(llvm::VAArgInst &I, const ctx *context) {}
+  // // corner cases
+  // inline void visitAtomicCmpXchgInst(llvm::AtomicCmpXchgInst &I, const ctx *context) {}
+  // inline void visitAtomicRMWInst(llvm::AtomicRMWInst &I, const ctx *context) {}
+  // inline void visitVAArgInst(llvm::VAArgInst &I, const ctx *context) {}
 
-  // vector operations
-  inline void visitExtractElementInst(llvm::ExtractElementInst &I, const ctx *context) {}
-  inline void visitInsertElementInst(llvm::InsertElementInst &I, const ctx *context) {}
-  inline void visitShuffleVectorInst(llvm::ShuffleVectorInst &I, const ctx *context) {}
+  // // vector operations
+  // inline void visitExtractElementInst(llvm::ExtractElementInst &I, const ctx *context) {}
+  // inline void visitInsertElementInst(llvm::InsertElementInst &I, const ctx *context) {}
+  // inline void visitShuffleVectorInst(llvm::ShuffleVectorInst &I, const ctx *context) {}
 
-  // instrinsic instruction classes.
-  inline void visitMemSetInst(llvm::MemSetInst &I, const ctx *context) {}
-  inline void visitMemMoveInst(llvm::MemMoveInst &I, const ctx *context) {}
+  // // intrinsic instruction classes.
+  // inline void visitMemSetInst(llvm::MemSetInst &I, const ctx *context) {}
+  // inline void visitMemMoveInst(llvm::MemMoveInst &I, const ctx *context) {}
 
-  // need to be handled? but no one use it.
-  inline void visitVAStartInst(llvm::VAStartInst &I, const ctx *context) {}
-  inline void visitVAEndInst(llvm::VAEndInst &I, const ctx *context) {}
-  inline void visitVACopyInst(llvm::VACopyInst &I, const ctx *context) {}
+  // // need to be handled? but no one use it.
+  // inline void visitVAStartInst(llvm::VAStartInst &I, const ctx *context) {}
+  // inline void visitVAEndInst(llvm::VAEndInst &I, const ctx *context) {}
+  // inline void visitVACopyInst(llvm::VACopyInst &I, const ctx *context) {}
 
   inline void visitFreezeInst(llvm::FreezeInst &I, const ctx *context) {}
+
   // getters
   inline MemModel &getMemModel() { return memModel; }
 

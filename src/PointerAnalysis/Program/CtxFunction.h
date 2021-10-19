@@ -15,6 +15,8 @@ limitations under the License.
 
 #include "PointerAnalysis/Program/CallSite.h"
 
+extern cl::opt<unsigned> Max_Indirect_Target;  // the limit of the size of indirect targets -> default value 999
+
 namespace pta {
 
 template <typename ctx>
@@ -38,9 +40,9 @@ class CtxFunction {
 
  public:
   CtxFunction(const ctx *C, const llvm::Function *F, const llvm::Instruction *I, CallGraphNode<ctx> *N)
-      : context(C), function(F), callSite(I), callNode(N) {}
+      : context(C), function(F), callNode(N), callSite(I) {}
   CtxFunction(const CtxFunction<ctx> &&cf) noexcept
-      : context(cf.context), function(cf.function), callNode(cf.callNode) {}
+      : context(cf.context), function(cf.function), callNode(cf.callNode), callSite(nullptr) {}
 
   CtxFunction(const CtxFunction<ctx> &) = delete;
   CtxFunction<ctx> &operator=(const CtxFunction<ctx> &) = delete;
@@ -110,7 +112,7 @@ class InDirectCallSite {
 
   [[nodiscard]] inline const llvm::Value *getValue() const {
     if (funPtr != nullptr) {
-      // overriden by language model.
+      // overridden by language model.
       return funPtr;
     }
     return callSite.getCalledValue();
@@ -120,8 +122,8 @@ class InDirectCallSite {
 
   [[nodiscard]] inline const llvm::Instruction *getCallSite() const { return this->callSite.getInstruction(); }
 
-  [[nodiscard]] inline bool resolvedTo(const llvm::Function *fun, bool applyLimit, size_t maxIndirectTarget = 999) {
-    if (applyLimit && this->targets.size() >= maxIndirectTarget) {
+  [[nodiscard]] inline bool resolvedTo(const llvm::Function *fun, bool applyLimit) {
+    if (applyLimit && this->targets.size() >= Max_Indirect_Target) {
       return false;
     }
     return this->targets.insert(fun).second;

@@ -18,6 +18,12 @@ namespace race {
 struct DetectRaceConfig {
   // writes preprocessedIR to a file specified by the string
   std::optional<std::string> dumpPreprocessedIR;
+
+  // Print the ProgramTrace when true
+  bool printTrace = false;
+
+  // Compute and print the coverage (= analyzed source code/all source code)
+  bool doCoverage = false;
 };
 
 Report detectRaces(llvm::Module *module, DetectRaceConfig config = DetectRaceConfig());

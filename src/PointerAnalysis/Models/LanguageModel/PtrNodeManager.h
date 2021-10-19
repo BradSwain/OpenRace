@@ -32,7 +32,7 @@ class PtrNodeManager : public SingleInstanceOwner<Pointer<ctx>> {
   PtrNode *uniPtrNode;   // special node that can point to every object.
 
  protected:
-  explicit PtrNodeManager() : consGraph(nullptr) {}
+  explicit PtrNodeManager() : consGraph(nullptr), nullPtrNode(nullptr), uniPtrNode(nullptr) {}
 
   template <typename PT>
   void init(ConsGraph *CG, llvm::LLVMContext &context) {
@@ -55,7 +55,7 @@ class PtrNodeManager : public SingleInstanceOwner<Pointer<ctx>> {
   // return map does not managed by singleinstanceowner as it may conflict
   // with function pointers (when initialCtx and globalCtx are the same)
   std::unordered_map<std::pair<const ctx *, const llvm::Function *>, Pointer<ctx>> retPtrMap;
-  //    an anonoymous pointer but can be indexed
+  //    an anonymous pointer but can be indexed
   //    std::unordered_map<std::pair<const ctx *, const void *>, PtrNode *>
   //    taggedAnonPtrMap;
   inline PtrNode *getUniPtr() const { return uniPtrNode; }
@@ -83,7 +83,7 @@ class PtrNodeManager : public SingleInstanceOwner<Pointer<ctx>> {
     return it->second.getPtrNode();
   }
 
-  // anonoyous ptr node should never be indexed, just a place holder
+  // anonymous ptr node should never be indexed, just a place holder
   // logically exist, but no corresponding llvm::Value
   template <typename PT>
   inline PtrNode *createAnonPtrNode() {

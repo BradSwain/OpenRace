@@ -8,12 +8,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include "DefaultHeapModel.h"
 
-#include "PointerAnalysis/Models/MemoryModel/DefaultHeapModel.h"
-
-#include <PointerAnalysis/Program/CallSite.h>
-#include <llvm/IR/Instructions.h>
-
+#include "PointerAnalysis/Program/CallSite.h"
 #include "PointerAnalysis/Util/Util.h"
 
 #define MORE_COMPLETE_TYPE_INFO
@@ -31,7 +28,7 @@ Type *DefaultHeapModel::getNextBitCastDestType(const Instruction *allocSite) {
     nextInst = invoke->getNormalDest()->getFirstNonPHIOrDbgOrLifetime();
   }
 
-  if (nextInst && isa<BitCastInst>(nextInst)) {
+  if (isa_and_nonnull<BitCastInst>(nextInst)) {
     Type *destTy = cast<BitCastInst>(nextInst)->getDestTy()->getPointerElementType();
     if (destTy->isSized()) {
       // only when the dest type is sized
@@ -93,7 +90,7 @@ Type *DefaultHeapModel::inferCallocType(const Function *fun, const Instruction *
           return getUnboundedArrayTy(elemType);
         }
       } else {
-        // TODO: maybe conservatively treat it as field insenstive object?
+        // TODO: maybe conservatively treat it as field insensitive object?
         return getUnboundedArrayTy(elemType);
       }
     }

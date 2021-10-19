@@ -12,7 +12,7 @@ limitations under the License.
 #pragma once
 
 // TODO: there are a lot of things to do to model C++'s memory model accurately
-// besides vtable e.g., runtime type information + class hirachy, so we put it
+// besides vtable e.g., runtime type information + class hierarchy, so we put it
 // into a CppMemModel this will make it easier for future extension when we need
 // to handle more languages such as Rust/Fortran
 
@@ -80,7 +80,7 @@ class CppMemModel : public FSMemModel<ctx> {
   static bool isSpecialTypeImpl(const llvm::Type *T) {
     auto vectorElemT = VectorAPI::resolveVecElemType(T);
     bool isVector = vectorElemT && VectorAPI::isSupportedElementType(vectorElemT);
-    // is type equivalience accurate enough? i.e., How often is it when user use
+    // is type equivalence accurate enough? i.e., How often is it when user use
     // the same type but not for vtable should be rare, the vtable ptr type is
     // "i32 (...) **"
     // FIXME: if there might be user defined type that is identical to vtable
@@ -189,7 +189,7 @@ class CppMemModel : public FSMemModel<ctx> {
         elem = AT->getArrayElementType();  // strip array
       }
 
-      llvm::Type *vecElemType = nullptr;
+      // llvm::Type *vecElemType = nullptr;
       while (auto ST = llvm::dyn_cast<llvm::StructType>(elem)) {
         auto result = VectorAPI::resolveVecElemType(ST);
         if (result != nullptr) {
@@ -240,7 +240,7 @@ class CppMemModel : public FSMemModel<ctx> {
     super initializeGlobal<PT>(gVar, DL);
   }
 
-  inline InterceptResult interceptFunction(const llvm::Function *F, const llvm::Instruction *callSite) {
+  inline InterceptResult interceptFunction(const llvm::Function *F, const llvm::Instruction * /* callSite */) {
     // does not matter as they function body should be deleted by
     // RewriteModeledAPIPass
     return {F, InterceptResult::Option::EXPAND_BODY};
@@ -265,10 +265,10 @@ class CppMemModel : public FSMemModel<ctx> {
       }
     }
 
-    // here handle the different constainer API
+    // here handle the different container API
     VectorAPI vecAPI(callSite);
     if (vecAPI.getAPIKind() != VectorAPI::APIKind::UNKNOWN) {
-      modelVectorAPIs<PT>(callee->getContext(), vecAPI);
+      modelVectorAPIs<PT>(caller->getContext(), vecAPI);
       return true;
     }
     return false;

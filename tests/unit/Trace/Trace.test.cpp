@@ -20,7 +20,9 @@ CATCH_REGISTER_ENUM(race::Event::Type, race::Event::Type::Read, race::Event::Typ
                     race::Event::Type::ExternCall)
 TEST_CASE("ThreadTrace construction", "[unit][event]") {
   const char *modString = R"(
+%union.pthread_attr_t = type { i64, [48 x i8] }
 declare void @print(i64)
+declare i32 @pthread_create(i64*, %union.pthread_attr_t*, i8* (i8*)*, i8*)
 
 define void @adder(i64* %c) {
     %val = load i64, i64* %c
@@ -29,24 +31,30 @@ define void @adder(i64* %c) {
     ret void
 }
 
-define void @foo() {
+define i8* @foo(i8* %0) {
     %x = alloca i64
     call void @adder(i64* %x)
     %pval = load i64, i64* %x
     call void @print(i64 %pval)
-    ret void
+    ret i8* null
 }
+
+define i32 @main() {
+    %1 = call i32 @pthread_create(i64* null, %union.pthread_attr_t* null, i8* (i8*)* @foo, i8* null)
+    ret i32 0
+}
+
 )";
 
   llvm::LLVMContext Ctx;
   llvm::SMDiagnostic Err;
   auto module = llvm::parseAssemblyString(modString, Err, Ctx);
 
-  race::ProgramTrace program(module.get(), "foo");
+  race::ProgramTrace program(module.get());
   auto const &threads = program.getThreads();
-  REQUIRE(threads.size() == 1);
+  REQUIRE(threads.size() == 2);
 
-  auto const &thread = threads.at(0);
+  auto const &thread = threads.at(1);
   auto const &events = thread->getEvents();
   REQUIRE(events.size() == 6);
   REQUIRE(events.at(0)->type == race::Event::Type::Call);
@@ -99,7 +107,7 @@ declare i32 @pthread_join(i64, i8**)
 
     auto const &fork = events.at(0);
     CHECK(fork->type == race::Event::Type::Fork);
-    CHECK(&fork->getThread() == thread.get());
+    CHECK(&fork->getThread() == thread);
     CHECK(&fork->getThread().program == &program);
 
     auto const &join = events.at(2);
@@ -203,19 +211,26 @@ declare i32 @pthread_join(i64, i8**)
 
 TEST_CASE("Construct mutex ThreadTrace", "[unit][event]") {
   const char *ModuleString = R"(
+%union.pthread_attr_t = type { i64, [48 x i8] }
 %union.pthread_mutex_t = type { %struct.__pthread_mutex_s }
 %struct.__pthread_mutex_s = type { i32, i32, i32, i32, i32, i16, i16, %struct.__pthread_internal_list }
 %struct.__pthread_internal_list = type { %struct.__pthread_internal_list*, %struct.__pthread_internal_list* }
 
-define dso_local i32 @main() #0 {
+define i8* @entry(i8* %0) #0 {
   %mutex = alloca %union.pthread_mutex_t
   %call = call i32 @pthread_mutex_lock(%union.pthread_mutex_t* %mutex)
   %call1 = call i32 @pthread_mutex_unlock(%union.pthread_mutex_t* %mutex)
-  ret i32 0
+  ret i8* null
+}
+
+define i32 @main() {
+    %1 = call i32 @pthread_create(i64* null, %union.pthread_attr_t* null, i8* (i8*)* @entry, i8* null)
+    ret i32 0
 }
 
 declare i32 @pthread_mutex_lock(%union.pthread_mutex_t*) #1
 declare i32 @pthread_mutex_unlock(%union.pthread_mutex_t*) #1
+declare i32 @pthread_create(i64*, %union.pthread_attr_t*, i8* (i8*)*, i8*)
 )";
 
   llvm::LLVMContext Ctx;
@@ -227,9 +242,9 @@ declare i32 @pthread_mutex_unlock(%union.pthread_mutex_t*) #1
 
   race::ProgramTrace program(module.get());
   auto const &threads = program.getThreads();
-  REQUIRE(threads.size() == 1);
+  REQUIRE(threads.size() == 2);
 
-  auto const &thread = threads.at(0);
+  auto const &thread = threads.at(1);
   auto const &events = thread->getEvents();
   REQUIRE(events.size() == 2);
 

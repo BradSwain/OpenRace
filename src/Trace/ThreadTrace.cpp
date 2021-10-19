@@ -11,106 +11,34 @@ limitations under the License.
 
 #include "Trace/ThreadTrace.h"
 
-#include "EventImpl.h"
-#include "IR/Builder.h"
-#include "Trace/CallStack.h"
+#include "Trace/Build/OpenMPRuntime.h"
+#include "Trace/Build/TraceBuilder.h"
 #include "Trace/ProgramTrace.h"
 
 using namespace race;
 
-namespace {
+ThreadTrace::ThreadTrace(ProgramTrace &program, const pta::CallGraphNodeTy *entry)
+    : id(0), program(program), spawnSite(std::nullopt) {
+  // Construct the ProgramState used to build the entire program trace
+  ProgramBuildState programState(program.pta);
+  // TODO: hard coding this for now
+  //  but we should have system for customizing which models are added if we have more in the future
+  programState.runtimeModels.push_back(std::make_unique<OpenMPRuntime>());
 
-void traverseCallNode(const pta::CallGraphNodeTy *node, const ThreadTrace &thread, CallStack &callstack,
-                      const pta::PTA &pta, std::vector<std::unique_ptr<const Event>> &events) {
-  auto func = node->getTargetFun()->getFunction();
-  if (callstack.contains(func)) {
-    // prevent recursion
-    return;
-  }
-  callstack.push(func);
+  // Construct the state used to build just this main thread
+  ThreadBuildState state(programState, *this, events, childThreads);
 
-  auto irFunc = generateFunctionSummary(func);
-  auto const context = node->getContext();
-  auto einfo = std::make_shared<EventInfo>(thread, context);
-
-  for (auto const &ir : irFunc) {
-    if (auto readIR = llvm::dyn_cast<ReadIR>(ir.get())) {
-      std::shared_ptr<const ReadIR> read(ir, readIR);
-      events.push_back(std::make_unique<const ReadEventImpl>(read, einfo, events.size()));
-    } else if (auto writeIR = llvm::dyn_cast<WriteIR>(ir.get())) {
-      std::shared_ptr<const WriteIR> write(ir, writeIR);
-      events.push_back(std::make_unique<const WriteEventImpl>(write, einfo, events.size()));
-    } else if (auto forkIR = llvm::dyn_cast<ForkIR>(ir.get())) {
-      std::shared_ptr<const ForkIR> fork(ir, forkIR);
-      events.push_back(std::make_unique<const ForkEventImpl>(fork, einfo, events.size()));
-    } else if (auto joinIR = llvm::dyn_cast<JoinIR>(ir.get())) {
-      std::shared_ptr<const JoinIR> join(ir, joinIR);
-      events.push_back(std::make_unique<const JoinEventImpl>(join, einfo, events.size()));
-    } else if (auto lockIR = llvm::dyn_cast<LockIR>(ir.get())) {
-      std::shared_ptr<const LockIR> lock(ir, lockIR);
-      events.push_back(std::make_unique<const LockEventImpl>(lock, einfo, events.size()));
-    } else if (auto unlockIR = llvm::dyn_cast<UnlockIR>(ir.get())) {
-      std::shared_ptr<const UnlockIR> lock(ir, unlockIR);
-      events.push_back(std::make_unique<const UnlockEventImpl>(lock, einfo, events.size()));
-    } else if (auto barrierIR = llvm::dyn_cast<BarrierIR>(ir.get())) {
-      std::shared_ptr<const BarrierIR> barrier(ir, barrierIR);
-      events.push_back(std::make_unique<const BarrierEventImpl>(barrier, einfo, events.size()));
-    } else if (auto callIR = llvm::dyn_cast<CallIR>(ir.get())) {
-      std::shared_ptr<const CallIR> call(ir, callIR);
-
-      if (call->isIndirect()) {
-        // TODO: handle indirect
-        llvm::errs() << "Skipping indirect call: " << *call << "\n";
-        continue;
-      }
-
-      auto directContext = pta::CT::contextEvolve(context, ir->getInst());
-      auto const directNode = pta.getDirectNodeOrNull(directContext, call->getInst()->getCalledFunction());
-
-      if (directNode == nullptr) {
-        // TODO: LOG unable to get child node
-        llvm::errs() << "Unable to get child node: " << call->getInst()->getCalledFunction()->getName() << "\n";
-        continue;
-      }
-
-      if (directNode->getTargetFun()->isExtFunction()) {
-        events.push_back(std::make_unique<ExternCallEventImpl>(call, einfo, events.size()));
-        continue;
-      }
-
-      events.push_back(std::make_unique<const EnterCallEventImpl>(call, einfo, events.size()));
-      traverseCallNode(directNode, thread, callstack, pta, events);
-      events.push_back(std::make_unique<const LeaveCallEventImpl>(call, einfo, events.size()));
-
-    } else {
-      llvm_unreachable("Should cover all IR types");
-    }
-  }
-
-  callstack.pop();
+  // Recursively build all thread traces
+  buildTrace(entry, state);
 }
 
-std::vector<std::unique_ptr<const Event>> buildEventTrace(const ThreadTrace &thread, const pta::CallGraphNodeTy *entry,
-                                                          const pta::PTA &pta) {
-  std::vector<std::unique_ptr<const Event>> events;
-  CallStack callstack;
-  traverseCallNode(entry, thread, callstack, pta, events);
-  return events;
-}
-}  // namespace
+ThreadTrace::ThreadTrace(const ForkEvent *spawningEvent, ProgramBuildState &programState)
+    : id(++programState.currentTID), program(spawningEvent->getThread().program), spawnSite(spawningEvent) {
+  auto const entry = spawningEvent->getThreadEntry();
 
-ThreadTrace::ThreadTrace(const race::ProgramTrace &program, const pta::CallGraphNodeTy *entry)
-    : id(0), program(program), spawnSite(std::nullopt), events(buildEventTrace(*this, entry, program.pta)) {}
-
-ThreadTrace::ThreadTrace(ThreadID id, const ForkEvent *spawningEvent, const pta::CallGraphNodeTy *entry)
-    : id(id),
-      program(spawningEvent->getThread().program),
-      spawnSite(spawningEvent),
-      events(buildEventTrace(*this, entry, program.pta)) {
-  auto const entries = spawningEvent->getThreadEntry();
-  auto it = std::find(entries.begin(), entries.end(), entry);
-  // entry mut be one of the entries from the spawning event
-  assert(it != entries.end());
+  // Build the thread trace
+  ThreadBuildState state(programState, *this, events, childThreads);
+  buildTrace(entry, state);
 }
 
 std::vector<const ForkEvent *> ThreadTrace::getForkEvents() const {

@@ -105,7 +105,7 @@ class CGNodeBase {
   IndirectNodeSet indirectNodes;
 
   inline CGNodeBase(NodeID id, CGNodeKind type)
-      : id(id), type(type), superNode(nullptr), childNodes{}, indirectNodes{}, isImmutable(false) {}
+      : type(type), id(id), superNode(nullptr), childNodes{}, isImmutable(false), indirectNodes{} {}
 
  private:
   inline bool insertConstraint(Self *node, Constraints edgeKind) {
@@ -295,7 +295,7 @@ class CGNodeBase {
 #undef __CONS_ITER__
 
 #ifdef USE_NODE_ID_FOR_CONSTRAINTS
-  // TODO: use LLVM built-in concat interator, they have better implementation
+  // TODO: use LLVM built-in concat iterator, they have better implementation
   using id_iterator = ConcatIterator<typename SetTy::iterator, 6, NodeID>;
   using const_id_iterator = ConcatIterator<typename SetTy::iterator, 6, NodeID>;
 

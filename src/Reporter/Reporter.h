@@ -51,6 +51,15 @@ void to_json(json &j, const SourceLoc &loc);
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const SourceLoc &loc);
 
+// Store ifnormation about a funciton call and its location in the source. Used to dsiplay callstack in report
+struct CallSignature {
+  std::optional<std::string> call;
+  std::optional<SourceLoc> loc;
+
+  explicit CallSignature(const llvm::CallBase *callBase);
+};
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const CallSignature &call);
+
 // TODO: for now, RaceAccess only has `inst` in addition to SourceLoc, mostly for debugging purpose.
 // We need to include other debugging information, such as stacktrace in the future
 struct RaceAccess {
@@ -58,6 +67,7 @@ struct RaceAccess {
   std::optional<SourceLoc> location;
   Event::Type type;
   const llvm::Instruction *inst;
+  std::vector<CallSignature> callstack;
 
   RaceAccess(const MemAccessEvent *event);
 
@@ -66,6 +76,7 @@ struct RaceAccess {
   bool operator==(const RaceAccess &other) const;
   bool operator!=(const RaceAccess &other) const;
   bool operator<(const RaceAccess &other) const;
+  void updateMisleadingDebugLoc();
 };
 
 void to_json(json &j, const RaceAccess &access);
@@ -99,7 +110,7 @@ class Report {
  public:
   std::set<Race> races;
 
-  Report(std::vector<std::pair<const WriteEvent *, const MemAccessEvent *>> rawRaces);
+  Report(const std::vector<std::pair<const WriteEvent *, const MemAccessEvent *>> &rawRaces);
 
   inline bool empty() { return races.empty(); };
   inline std::size_t size() { return races.size(); };

@@ -34,7 +34,7 @@ class MemLayout {
   // By byte. If the bit is set, the offset is valid (not in the middle of a
   // primary type)
   llvm::SparseBitVector<> elementLayout;
-  // By byte. If the bit is set, the (physical) offset is for a speical object;
+  // By byte. If the bit is set, the (physical) offset is for a special object;
   llvm::SparseBitVector<> specialLayout;
 
   // seems the test on sparsebitvector can become bottleneck, cache it using
@@ -70,8 +70,12 @@ class MemLayout {
   inline void cacheIntoBitVector() {
     assert(!cached);
     int num = elementLayout.find_last();
-    indexableLayout.resize(num + 1);
-    logicalIndex.resize(num + 1, -1);
+    if (num < 0) {
+      return;
+    }
+    unsigned size = static_cast<unsigned int>(num) + 1;
+    indexableLayout.resize(size);
+    logicalIndex.resize(size, -1);
 
     // cache it into bitvector for faster indexing
     int i = 0;

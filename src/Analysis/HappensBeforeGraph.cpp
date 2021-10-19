@@ -11,6 +11,8 @@ limitations under the License.
 
 #include "Analysis/HappensBeforeGraph.h"
 
+#include <IR/IRImpls.h>
+
 /*
 Happens before depends on each event having an increasing ID per thread:
 
@@ -54,23 +56,21 @@ using namespace race;
 
 namespace {
 const ThreadTrace *getForkedThread(const ForkEvent *fork, const ProgramTrace &program) {
-  for (auto const &thread : program.getThreads()) {
-    if (thread->spawnSite.has_value() && thread->spawnSite.value() == fork) {
-      return thread.get();
-    }
-  }
-  assert(false && "Some forkEvent in does not correspond to a thread");
-  return nullptr;
+  auto const &threads = program.getThreads();
+  auto thread = std::find_if(threads.begin(), threads.end(), [&fork](auto const &thread) {
+    return thread->spawnSite.has_value() && thread->spawnSite.value() == fork;
+  });
+
+  assert(thread != threads.end() && "Some forkEvent in does not correspond to a thread");
+  return *thread;
 }
 
 const ForkEvent *getForkWithHandle(const llvm::Value *handle, const ThreadTrace &thread) {
-  for (auto const &fork : thread.getForkEvents()) {
-    if (fork->getIRInst()->getThreadHandle() == handle) {
-      return fork;
-    }
-  }
+  auto const &events = thread.getForkEvents();
+  auto it = std::find_if(events.begin(), events.end(),
+                         [&handle](auto forkEvent) { return forkEvent->getIRInst()->getThreadHandle() == handle; });
 
-  return nullptr;
+  return (it != events.end()) ? *it : nullptr;
 }
 
 const ForkEvent *getForkWithHandle(const llvm::Value *handle, const ProgramTrace &program) {
@@ -80,13 +80,16 @@ const ForkEvent *getForkWithHandle(const llvm::Value *handle, const ProgramTrace
       return fork;
     }
   }
-
   return nullptr;
 }
 
 const ForkEvent *getCorrespondingFork(const JoinEvent *join, const ProgramTrace &program) {
-  auto const joinHandle = join->getIRInst()->getThreadHandle();
+  // if fork has been explicitly set, use it.
+  // now we only store the corresponding fork for OpenMPTaskJoin
+  if (auto const fork = join->getForkEvent()) return fork.value();
 
+  // Else need to use heuristics to match join to a fork
+  auto const joinHandle = join->getIRInst()->getThreadHandle();
   // Check for fork on this thread with matching handle first
   if (auto fork = getForkWithHandle(joinHandle, join->getThread()); fork != nullptr) {
     return fork;
@@ -163,7 +166,7 @@ HappensBeforeGraph::HappensBeforeGraph(const race::ProgramTrace &program) {
   // an event in the map (meaning a previous event has visited this barrier)
   // the dual-edge is added between the prev event and the current event,
   // and the current event is added to the map so that the next event to reach
-  // this barrier will add the dual-edge with the curent event.
+  // this barrier will add the dual-edge with the current event.
   std::map<const llvm::Instruction *, const BarrierEvent *> lastBarrier;
   auto addBarrierEdge = [&lastBarrier, this](const BarrierEvent *event) {
     auto const barrierInst = event->getInst();
@@ -180,7 +183,7 @@ HappensBeforeGraph::HappensBeforeGraph(const race::ProgramTrace &program) {
     lastBarrier[barrierInst] = event;
 
     // FIXME: This logic will likely need to be updated for non-omp barriers
-    assert(event->getIRInst()->type == IR::Type::OpenMPBarrier && "Check that non-omp barriers work correctly");
+    assert(event->getIRType() == IR::Type::OpenMPBarrier && "Check that non-omp barriers work correctly");
   };
 
   for (auto const &thread : program.getThreads()) {
@@ -225,6 +228,58 @@ HappensBeforeGraph::HappensBeforeGraph(const race::ProgramTrace &program) {
       }
     }
   }
+
+  // we repeatedly need to check if one node is reachable from another
+  // to optimise this, and since the connectivity of this graph is relatively low, we pre-search all reachable sync
+  // events from each sync event and keep a cache for later since this graph is (effectively) unmodifiable
+  //
+  // there are two kinds of edges: thread-internal edges (from/to the same thread) and cross-thread edges (stored in
+  // syncEdges)
+  // we iterate over all thread sync events to pick up all possible sources and keep track of both thread-internal and
+  // cross-thread edges
+  std::set<EventPID> allSrcs;
+  for (auto const &thread : threadSyncs) {
+    std::copy(thread.second.begin(), thread.second.end(), std::inserter(allSrcs, allSrcs.end()));
+  }
+
+  for (auto src : allSrcs) {
+    std::deque<EventPID> worklist;
+    std::set<EventPID> visited;
+
+    auto const addToWorklist = [&worklist, &visited](EventPID node) {
+      // Only add to worklist if not already visited
+      if (visited.find(node) != visited.end()) {
+        return;
+      }
+      worklist.push_back(node);
+    };
+
+    addToWorklist(src);
+    while (!worklist.empty()) {
+      auto const node = worklist.front();
+      visited.insert(node);
+      worklist.pop_front();
+
+      // connectivity is low, so there's no need to perform a lookup to see if we already have reachable for this node
+      // as the chances are we don't
+
+      // Add next nodes from sync edges
+      // cppcheck-suppress stlIfFind
+      if (auto it = syncEdges.find(node); it != syncEdges.end()) {
+        for (auto const next : it->second) {
+          addToWorklist(next);
+        }
+      }
+
+      // Add next sync event after this one on same thread
+      // cppcheck-suppress stlIfFind
+      if (auto opt = findNextSyncAfter(node); opt.has_value()) {
+        addToWorklist(opt.value());
+      }
+    }
+
+    syncReachable.emplace(src, visited);
+  }
 }
 
 void HappensBeforeGraph::addSync(const Event *syncEvent) {
@@ -265,44 +320,14 @@ bool HappensBeforeGraph::canReach(const Event *src, const Event *dst) const {
     return true;
   }
 
-  return syncEdgesDFS(srcSync.value(), dstSync.value());
+  return isReachable(srcSync.value(), dstSync.value());
 }
 
-bool HappensBeforeGraph::syncEdgesDFS(HappensBeforeGraph::EventPID src, HappensBeforeGraph::EventPID dst) const {
-  std::vector<EventPID> worklist;
-  std::set<EventPID> visited;
-
-  auto const addToWorklist = [&worklist, &visited](EventPID node) {
-    // Only add to worklist if not already visited
-    if (visited.find(node) != visited.end()) {
-      return;
-    }
-    worklist.push_back(node);
-  };
-
-  addToWorklist(src);
-  while (!worklist.empty()) {
-    auto const node = worklist.back();
-    visited.insert(node);
-    worklist.pop_back();
-
-    if (node == dst || hasEdge(src, dst)) {
-      return true;
-    }
-
-    // Add next nodes from sync edges
-    if (auto it = syncEdges.find(node); it != syncEdges.end()) {
-      for (auto const next : it->second) {
-        addToWorklist(next);
-      }
-    }
-
-    // Add next sync event after this one on same thread
-    if (auto opt = findNextSyncAfter(node); opt.has_value()) {
-      addToWorklist(opt.value());
-    }
+bool HappensBeforeGraph::isReachable(EventPID src, EventPID dst) const {
+  // cppcheck-suppress stlIfFind
+  if (auto const reachable = syncReachable.find(src); reachable != syncReachable.end()) {
+    return reachable->second.find(dst) != reachable->second.end();
   }
-
   return false;
 }
 
@@ -371,6 +396,7 @@ std::optional<HappensBeforeGraph::EventPID> HappensBeforeGraph::findPrevSync(con
 }
 
 void HappensBeforeGraph::debugDump(llvm::raw_ostream &os) const {
+  os << "==== Sync Nodes ====\n";
   for (auto const &[tid, syncs] : threadSyncs) {
     os << "T" << tid << " Syncs";
     for (auto const &sync : syncs) {
@@ -383,7 +409,7 @@ void HappensBeforeGraph::debugDump(llvm::raw_ostream &os) const {
   for (auto const &[src, dsts] : syncEdges) {
     os << src.tid << ":" << src.eid << " ->";
     for (auto const &dst : dsts) {
-      os << "\n\t" << dst.tid << ":" << src.tid << "\n";
+      os << "\n\t" << dst.tid << ":" << dst.eid << "\n";
     }
   }
   os << "\n";

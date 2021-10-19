@@ -11,15 +11,14 @@ limitations under the License.
 
 #include "RaceDetect.h"
 
-#include <llvm/Analysis/ScopedNoAliasAA.h>
-
 #include "Analysis/HappensBeforeGraph.h"
 #include "Analysis/LockSet.h"
 #include "Analysis/OpenMPAnalysis.h"
 #include "Analysis/SharedMemory.h"
 #include "Analysis/SimpleAlias.h"
+#include "Analysis/ThreadLocalAnalysis.h"
 #include "LanguageModel/RaceModel.h"
-#include "PreProcessing/PreProcessing.h"
+#include "Statistics/Coverage.h"
 #include "Trace/ProgramTrace.h"
 
 using namespace race;
@@ -38,20 +37,21 @@ Report race::detectRaces(llvm::Module *module, DetectRaceConfig config) {
     }
   }
 
+  if (config.printTrace) {
+    llvm::outs() << program << "\n";
+  }
+
+  llvm::outs() << timestamp() << " Start Analysis\n";
   race::SharedMemory sharedmem(program);
   race::HappensBeforeGraph happensbefore(program);
   race::LockSet lockset(program);
   race::SimpleAlias simpleAlias;
-  race::OpenMPAnalysis ompAnalysis;
+  race::OpenMPAnalysis ompAnalysis(program);
+  race::ThreadLocalAnalysis threadlocal;
+
+  llvm::outs() << timestamp() << " Start Race Detection\n";
 
   race::Reporter reporter;
-
-  llvm::PassBuilder PB;
-  llvm::FunctionAnalysisManager FAM;
-  PB.registerFunctionAnalyses(FAM);
-  // contains default AA pipeline (type + scoped + global)
-  // but i do not know how to register it properly now
-  // FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
 
   // Adds to report if race is detected between write and other
   auto checkRace = [&](const race::WriteEvent *write, const race::MemAccessEvent *other) {
@@ -59,25 +59,38 @@ Report race::detectRaces(llvm::Module *module, DetectRaceConfig config) {
       return;
     }
 
+    if (threadlocal.isThreadLocalAccess(write, other)) {
+      return;
+    }
+
     if (simpleAlias.mustNotAlias(write, other)) {
       return;
     }
 
-    if (ompAnalysis.inSameTeam(write, other)) {
+    if (ompAnalysis.fromSameParallelRegion(write, other)) {
       // Non overlapping array accesses inside of an OpenMP loop are not races
       // e.g.
       //  #pragma omp parallel for shared(A)
       //  for (int i = 0; i < N: i++) { A[i] = i; }
       // even though A is shared, each index is unique so there is no race
-      if (ompAnalysis.isLoopArrayAccess(write, other) && !ompAnalysis.canIndexOverlap(write, other)) {
+      if (ompAnalysis.isNonOverlappingLoopAccess(write, other)) {
         return;
       }
 
       // Certain omp blocks cannot race with themselves or those of the same type within the same scope/team
       if (ompAnalysis.inSameSingleBlock(write, other) || ompAnalysis.inSameReduce(write, other) ||
-          ompAnalysis.bothInMasterBlock(write, other)) {
+          race::OpenMPAnalysis::insideCompatibleSections(write, other)) {
         return;
       }
+
+      // No race if guaranteed to be executed by same thread
+      if (ompAnalysis.guardedBySameTID(write, other)) return;
+
+      // Lastprivate code will only be executed by one thread
+      // Model lastprivate by assuming lastprivate code cannot race with other last private code
+      // This may miss races according to OpenMP specification,
+      //  but will not miss races according to how Clang generates OpenMP code (as of clang 10.0.1)
+      if (ompAnalysis.isInLastprivate(write) && ompAnalysis.isInLastprivate(other)) return;
     }
 
     // Race detected
@@ -113,7 +126,19 @@ Report race::detectRaces(llvm::Module *module, DetectRaceConfig config) {
     }
   }
 
-  llvm::outs() << program << "\n";
+  if (DEBUG_PTA) {
+    happensbefore.debugDump(llvm::outs());
+  }
 
+  if (DEBUG_PTA) {
+    happensbefore.debugDump(llvm::outs());
+  }
+
+  if (config.doCoverage) {
+    race::Coverage coverage(program);
+    llvm::outs() << coverage << "\n";
+  }
+
+  llvm::outs() << timestamp() << " Start Report\n";
   return reporter.getReport();
 }

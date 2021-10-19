@@ -13,47 +13,45 @@ limitations under the License.
 
 #include "PreProcessing/PreProcessing.h"
 #include "Trace/Event.h"
-
 using namespace race;
 
 ProgramTrace::ProgramTrace(llvm::Module *module, llvm::StringRef entryName) : module(module) {
+  llvm::outs() << timestamp() << " Start Preproc\n";
   // Run preprocessing on module
   preprocess(*module);
+
+  llvm::outs() << timestamp() << " Start PTA\n";
 
   // Run pointer analysis
   pta.analyze(module, entryName);
 
-  auto mainEntry = pta::GT::getEntryNode(pta.getCallGraph());
-  // construct main thread
-  threads.push_back(std::make_unique<ThreadTrace>(*this, mainEntry));
+  llvm::outs() << timestamp() << " Start Build Trace\n";
+  // build all threads starting from this main func
+  auto const mainEntry = pta::GT::getEntryNode(pta.getCallGraph());
+  // Program trace needs to hold a unique ptr to the entry thread
+  mainThread = std::make_unique<ThreadTrace>(*this, mainEntry);
 
-  std::vector<const ForkEvent *> worklist;
-  // Add events spawned by main thread to worklist to be traversed
-  auto const mainThreadForks = threads.back()->getForkEvents();
-  worklist.insert(worklist.end(), mainThreadForks.begin(), mainThreadForks.end());
+  // Traverse all child threads and build a flat list of all threads
+  std::deque<const ThreadTrace *> worklist;
+  worklist.push_back(mainThread.get());
 
   while (!worklist.empty()) {
-    auto forkEvent = worklist.back();
+    auto const currentThread = worklist.back();
     worklist.pop_back();
 
-    // Heuristic: just choose first entry if there are more than one
-    auto entries = forkEvent->getThreadEntry();
-    assert(!entries.empty());
-    auto entry = entries.front();
-    // TODO: log if entries contained more than one possible entry
+    threads.push_back(currentThread);
 
-    // Build events for this thread entry
-    threads.push_back(std::make_unique<ThreadTrace>(threads.size(), forkEvent, entry));
-
-    // Add any newly forked threads
-    for (auto const newFork : threads.back()->getForkEvents()) {
-      worklist.push_back(newFork);
+    auto const &childThreads = currentThread->getChildThreads();
+    for (auto it = childThreads.rbegin(), end = childThreads.rend(); it != end; ++it) {
+      worklist.push_back(it->get());
     }
   }
 }
 
 llvm::raw_ostream &race::operator<<(llvm::raw_ostream &os, const ProgramTrace &trace) {
   os << "===== Program Trace =====\n";
+
+  // the order is a little reversed for parallel omp forks after changing the traversal order
   auto const &threads = trace.getThreads();
   for (auto const &thread : threads) {
     os << *thread;

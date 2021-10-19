@@ -11,10 +11,27 @@ limitations under the License.
 
 #include "Trace/Event.h"
 
+#include "Trace/ThreadTrace.h"
+
 using namespace race;
 
 llvm::raw_ostream &race::operator<<(llvm::raw_ostream &os, const Event &event) {
-  os << event.getID() << " " << event.type << "\t" << *event.getInst();
+  os << event.getThread().id << ":" << event.getID() << " " << event.type << "\t" << *event.getInst();
+  if (auto const memAccess = llvm::dyn_cast<MemAccessEvent>(&event)) {
+    os << "   {";
+    auto const mem = memAccess->getAccessedMemory();
+    auto it = mem.begin();
+    auto const end = mem.end();
+    if (it != end) {
+      os << (*it)->getObjectID();
+    }
+
+    for (; it != end; ++it) {
+      os << ", " << (*it)->getObjectID();
+    }
+
+    os << "}";
+  }
   return os;
 }
 

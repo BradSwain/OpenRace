@@ -66,16 +66,16 @@ class GraphWriter {
   GraphWriter(llvm::raw_ostream &o, const GraphType &g, bool SN) : O(o), G(g) { DTraits = DOTTraits(SN); }
 
   void writeGraph(const std::string &Title = "") {
-    // Output the header for the callgraph...
+    // Output the header for the G...
     writeHeader(Title);
 
-    // Emit all of the nodes in the callgraph...
+    // Emit all of the nodes in the G...
     writeNodes();
 
-    // Output any customizations on the callgraph
+    // Output any customizations on the G
     llvm::DOTGraphTraits<GraphType>::addCustomGraphFeatures(G, *this);
 
-    // Output the end of the callgraph
+    // Output the end of the G
     writeFooter();
   }
 
@@ -173,13 +173,14 @@ class GraphWriter {
     // Output all of the edges now
     edge_iterator EI = GTraits::child_edge_begin(Node);
     edge_iterator EE = GTraits::child_edge_end(Node);
-    for (unsigned i = 0; EI != EE && i != 64; ++EI, ++i)
+    // bz: seems like the 2nd param of writeEdge will not exceed max int
+    for (int i = 0; EI != EE && i != 64; ++EI, ++i)
       if (!DTraits.isNodeHidden(GTraits::edge_dest(*EI))) writeEdge(Node, i, EI);
     for (; EI != EE; ++EI)
       if (!DTraits.isNodeHidden(GTraits::edge_dest(*EI))) writeEdge(Node, 64, EI);
   }
 
-  void writeEdge(NodeRef Node, unsigned edgeidx, edge_iterator EI) {
+  void writeEdge(NodeRef Node, int edgeidx, edge_iterator EI) {
     if (NodeRef TargetNode = GTraits::edge_dest(*EI)) {
       int DestPort = -1;
       if (DTraits.getEdgeSourceLabel(Node, EI).empty()) edgeidx = -1;

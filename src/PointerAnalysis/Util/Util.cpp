@@ -11,11 +11,14 @@ limitations under the License.
 
 #include "PointerAnalysis/Util/Util.h"
 
+#include <Logging/Log.h>
+#include <PointerAnalysis/Models/LanguageModel/ConsGraphBuilder.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/InitLLVM.h>
 #include <llvm/Transforms/Utils/Local.h>
 
 using namespace llvm;
@@ -352,8 +355,8 @@ void pta::recordCGNode(const llvm::Value *val) {
 
 void pta::dumpCGNodeDistribution() {
   llvm::outs() << "*************************************\n";
-  for (auto it = NodeDistribution.begin(), ie = NodeDistribution.end(); it != ie; it++) {
-    llvm::outs() << it->first << ": " << it->second << "\n";
+  for (auto &it : NodeDistribution) {
+    llvm::outs() << it.first << ": " << it.second << "\n";
   }
   llvm::outs() << "*************************************\n";
 }

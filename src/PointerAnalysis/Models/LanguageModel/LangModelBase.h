@@ -14,6 +14,8 @@ limitations under the License.
 #include "ConsGraphBuilder.h"
 #include "PointerAnalysis/Util/Util.h"
 
+extern cl::opt<pta::IndirectResolveOption> INDIRECT_OPTION;  // default value = IndirectResolveOption::WITH_LIMIT
+
 namespace pta {
 
 // TODO: what about the function subroutine is an indirect call
@@ -23,7 +25,7 @@ template <typename ctx, typename MemModel, typename PtsTy, typename SubClass>
 class LangModelBase : public ConsGraphBuilder<ctx, MemModel, PtsTy, SubClass> {
  public:
   // **** start ****
-  // five functions need to be overriden by the subclass
+  // five functions need to be overridden by the subclass
 
   // determine whether the resolved indirect call is compatible
   inline bool isCompatible(const llvm::Instruction *callsite, const llvm::Function *target) {
@@ -74,10 +76,9 @@ class LangModelBase : public ConsGraphBuilder<ctx, MemModel, PtsTy, SubClass> {
     }
   }
 
-  inline IndirectResolveOption onNewIndirectTargetResolvation(const llvm::Function *F,
-                                                              const llvm::Instruction *callsite) {
-    // by default
-    return IndirectResolveOption::WITH_LIMIT;
+  inline IndirectResolveOption onNewIndirectTargetResolvation(const llvm::Function * /* F */,
+                                                              const llvm::Instruction * /* callsite */) {
+    return INDIRECT_OPTION;
   }
 
   // **** optional end ****

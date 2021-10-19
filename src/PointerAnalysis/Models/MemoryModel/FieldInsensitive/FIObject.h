@@ -27,7 +27,7 @@ class FIObject {
   using ObjNode = CGObjNode<ctx, FIObject<ctx>>;
 
   // the allocation site
-  // for field-insentive PTA, each allocation site correponding to one object.
+  // for field-insensitive PTA, each allocation site corresponding to one object.
   const AllocSite<ctx> allocSite;
   ObjNode* objNode = nullptr;
 

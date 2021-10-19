@@ -76,13 +76,13 @@ class PtrRingBuffer {
     return *this;
   };
 
-  // return poped item
+  // return popped item
   PtrT *push(PtrT *value) {
-    PtrT *poped = buffer[last];
+    PtrT *popped = buffer[last];
     buffer[last] = value;
     last = (last + 1) % N;
 
-    return poped;
+    return popped;
   }
 
   iterator begin() const { return RingBufferIterator<PtrT, N>(this, last); }
